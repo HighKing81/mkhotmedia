@@ -1,0 +1,179 @@
+#!/bin/bash
+#
+# mkhotmedia version 20aug2009
+#
+# Author: Michel Hoogervorst <michel@highking.nl>
+# License: GPL v2
+#
+
+# Variables
+tmpdir=/tmp/mkhotmedia
+source_root=/mnt/hotmedia
+kernel=$(uname -r);
+media_label=hotmedia
+depmod=/sbin/depmod
+mke2fs=/sbin/mke2fs
+mksquashfs=/usr/bin/mksquashfs
+isolinux_cfg=/usr/share/mkhotmedia/isolinux.cfg
+isolinux_splash=/usr/share/mkhotmedia/splash.jpg
+extras_dir=/home/michel/mcnlive
+
+# Constants
+unixtime=$(date +%s);
+dir=$tmpdir/$unixtime
+idir=$dir/tmpinitrd
+
+# We need to be root in order to access all nessecary files.
+if [ "$UID" != "0" ]; then
+        echo "$0 should be run as root."
+        exit 1
+fi
+
+#functions
+copy() {
+	install -o 0 -g 0 -m 700 $1 $2 || exit 1
+}
+
+usage() {
+	echo "Usage: $0 -o <output_file> [options]
+
+Possible options:
+ -o <file>  : output file
+ -t <path>  : temporary directory
+ -r <path>  : the source root
+ -l <label> : Volume label inside the iso file
+ -h         : this help screen"
+}
+
+# Get command-line optons
+while getopts "ht:r:l:o:" cmdline
+do
+  case $cmdline in
+        h)
+        usage
+        exit 1
+        ;;
+        t)
+        tmpdir=$OPTARG
+        ;;
+        r)
+        source_root=$OPTARG
+        ;;
+        l)
+        media_label=$OPTARG
+        ;;
+        o)
+        isofile=$OPTARG
+        ;;
+  esac
+done
+
+if [ -z $isofile ]; then
+	echo "No output file provided"
+	exit 1
+fi
+
+echo Building directory structure in $dir...
+mkdir -p $idir/bin
+mkdir -p $idir/sbin
+mkdir -p $idir/etc
+mkdir -p $idir/usr/{bin,sbin,share/ldetect-lst}
+mkdir -p $idir/lib/{modules/$kernel/kernel/{drivers/{block,usb,message/fusion},fs,lib},module-init-tools}
+mkdir -p $idir/proc
+mkdir -p $idir/sys
+mkdir -p $idir/dev
+mkdir -p $idir/mnt/hotmedia
+mkdir -p $idir/hotram
+mkdir -p $idir/hotloop
+mkdir -p $idir/hotunion
+mkdir -p $dir/hotmedia/isolinux
+
+echo Creating device nodes in $idir/dev/...
+mknod $idir/dev/initrd b 1 250
+mknod $idir/dev/console c 5 1;
+mknod $idir/dev/null c 1 3
+mknod $idir/dev/ram b 1 1
+mknod $idir/dev/tty c 5 0
+
+echo Copying files to $idir/...
+copy /usr/bin/busybox $idir/bin/busybox
+copy /usr/share/mkhotmedia/init $idir/init
+sed -i "s/MEDIALABEL/$media_label/g" $idir/init
+copy /usr/share/mkhotmedia/halt.hotmedia $idir/sbin/halt.hotmedia
+#copy /bin/plymouth $idir/bin/plymouth
+#copy /sbin/plymouthd $idir/sbin/plymouthd
+#cp -pr /usr/share/plymouth $idir/usr/share/plymouth
+touch $idir/etc/mtab
+touch $idir/etc/fstab
+
+# Copy Mandriva probe-modules to our initrd
+copy /usr/lib/drakx-installer-binaries/probe-modules $idir/bin/probe-modules
+copy /usr/share/ldetect-lst/pcitable.gz $idir/usr/share/ldetect-lst/pcitable.gz
+copy /usr/share/ldetect-lst/usbtable.gz $idir/usr/share/ldetect-lst/usbtable.gz
+copy /usr/share/ldetect-lst/fallback-modules.alias $idir/usr/share/ldetect-lst/fallback-modules.alias
+copy /lib/module-init-tools/ldetect-lst-modules.alias $idir/lib/module-init-tools/ldetect-lst-modules.alias
+
+# Copy necessary modules
+## TODO: Copy not from our root, but from source root.
+## TODO: Create function for cp -ar
+cp -ar /lib/modules/$kernel/kernel/drivers/scsi $idir/lib/modules/$kernel/kernel/drivers/
+cp -ar /lib/modules/$kernel/kernel/drivers/ide $idir/lib/modules/$kernel/kernel/drivers/
+cp -ar /lib/modules/$kernel/kernel/drivers/ata $idir/lib/modules/$kernel/kernel/drivers/
+cp -ar /lib/modules/$kernel/kernel/drivers/usb/class $idir/lib/modules/$kernel/kernel/drivers/usb/
+cp -ar /lib/modules/$kernel/kernel/drivers/usb/core $idir/lib/modules/$kernel/kernel/drivers/usb/
+cp -ar /lib/modules/$kernel/kernel/drivers/usb/host $idir/lib/modules/$kernel/kernel/drivers/usb/
+cp -ar /lib/modules/$kernel/kernel/drivers/usb/storage $idir/lib/modules/$kernel/kernel/drivers/usb/
+cp -ar /lib/modules/$kernel/kernel/drivers/block/loop* $idir/lib/modules/$kernel/kernel/drivers/block/
+cp -ar /lib/modules/$kernel/kernel/fs/nls $idir/lib/modules/$kernel/kernel/fs/
+cp -ar /lib/modules/$kernel/kernel/fs/fat $idir/lib/modules/$kernel/kernel/fs/
+cp -ar /lib/modules/$kernel/kernel/fs/isofs $idir/lib/modules/$kernel/kernel/fs/
+cp -ar /lib/modules/$kernel/kernel/fs/squashfs $idir/lib/modules/$kernel/kernel/fs
+cp -ar /lib/modules/$kernel/kernel/fs/unionfs $idir/lib/modules/$kernel/kernel/fs
+cp -ar /lib/modules/$kernel/kernel/drivers/message/fusion/mptbase* $idir/lib/modules/$kernel/kernel/drivers/message/fusion/
+cp -ar /lib/modules/$kernel/kernel/lib/crc-t10dif* $idir/lib/modules/$kernel/kernel/lib/
+
+# Depmod
+$depmod -a --basedir $idir || exit $?
+
+# Create cpio archive
+echo -n Generating gzipped cpio-archive...
+pushd $idir > /dev/null
+  find . | cpio --quiet -H newc -o | gzip -9 > ../hotmedia/isolinux/initrd.img
+popd > /dev/null
+echo done.
+
+# Create squashfs file
+## TODO: Make this look a little better... :-(
+$mksquashfs $source_root $dir/hotmedia/hotroot.sqfs -ef /usr/share/mkhotmedia/exclude.list -wildcards
+## TODO: Squashfs with lzma compression is a lot smaller. Use it with 1024K blocksize to gain even more.
+# mksquashfs3 $source_root $dir/hotmedia/hotroot.sqfs -ef /usr/share/mkhotmedia/exclude.list -wildcards -lzma -b 1048576
+
+
+echo -n Copying isolinux files to $dir/hotmedia/isolinux...
+copy /usr/lib/syslinux/isolinux.bin $dir/hotmedia/isolinux/isolinux.bin
+copy $source_root/boot/vmlinuz-$kernel $dir/hotmedia/isolinux/vmlinuz
+copy /usr/lib/syslinux/vesamenu.c32 $dir/hotmedia/isolinux/vesamenu.c32
+copy $isolinux_splash $dir/hotmedia/isolinux/splash.jpg
+copy $isolinux_cfg $dir/hotmedia/isolinux/isolinux.cfg
+echo done.
+
+
+echo -n Creating final .iso file...
+mkisofs -quiet -l -R -J -V $media_label \
+	-b isolinux/isolinux.bin -c isolinux/boot.catalog \
+	-hide-rr-moved -no-emul-boot -boot-load-size 4 -boot-info-table \
+	-o $isofile $dir/hotmedia/ $extras_dir || exit $?
+echo done.
+
+echo -n "Hybrid'ing the iso..."
+isohybrid $isofile
+echo done.
+
+echo -n "Generating md5sum..."
+md5sum $isofile > $isofile.md5
+echo done!
+
+echo "Wrote $isofile."
+
+# If we have reached this point, we can safely assume everything went quite well.
+exit 0

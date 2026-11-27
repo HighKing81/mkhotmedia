@@ -1,0 +1,14 @@
+dev/*
+proc/*
+sys/*
+tmp/*
+boot/initrd*
+etc/fstab
+etc/mtab
+etc/iftab
+etc/rc?.d/*netfs
+etc/sysconfig/harddrake2/*
+etc/sysconfig/network-scripts/ifcfg-eth*
+etc/sysconfig/network-scripts/wireless.d/*
+etc/udev/rules.d/70-*
+etc/udev/rules.d/alsa.rules

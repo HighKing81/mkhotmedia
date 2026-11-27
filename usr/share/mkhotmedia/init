@@ -1,0 +1,117 @@
+#!/bin/busybox ash
+#
+# Michel's init, version 2010-02-15
+#
+# Author: Michel Hoogervorst <michel@highking.nl>
+# License: GPL v2
+#
+# This file is part of mkhotmedia.
+#
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin:/initrd/bin:/initrd/sbin:/initrd/usr/bin:/initrd/usr/sbin
+
+# Define messages
+okmsg() {
+  echo -e "\\033[1;32m"OK"\\033[0;39m"
+}
+failmsg() {
+  echo -e "\\033[1;31m"FAILED! "\\033[0;39m"
+  exit $1
+}
+warnmsg() {
+  echo -e "\\033[1;33m"SORRY :-\( "\\033[0;39m"
+}
+
+# Mount /proc and /sys
+busybox mount -t proc /proc /proc
+busybox mount -t sysfs /sys /sys
+
+## Start plymouthd (doesn't work yet)
+#exec plymouthd --attach-to-session
+#exec plymouth --show-splash
+
+# Install busybox binaries
+busybox --install
+
+# Load necessary modules
+modprobe loop
+modprobe vfat
+modprobe squashfs
+modprobe unionfs
+modprobe isofs
+modprobe ide_cd_mod
+modprobe sr_mod
+modprobe sd_mod
+probe-modules --cdrom
+
+# Let mdev populate /dev
+mdev -s
+
+# Do we want to debug initrd?
+grep -iq initrd_debug /proc/cmdline && ash
+
+# Try to mount the media
+echo -n "Trying to mount live media: "
+if mount -o ro LABEL=MEDIALABEL /mnt/hotmedia > /dev/null 2>&1
+then okmsg
+else echo -e "\\033[1;31m"FAILED! "\\033[0;39m"
+	echo "Mount failed, trying to load some extra drivers..."
+	for driver in /lib/modules/`uname -r`/kernel/drivers/usb/storage/*; do
+		modprobe `basename $driver .ko.gz`
+	done
+
+	echo "Sleeping for 5 seconds for devices to initialize..."
+	sleep 5
+
+	echo -n "Retrying to mount live media: "
+	mount -o ro LABEL=MEDIALABEL /mnt/hotmedia > /dev/null 2>&1 && okmsg || failmsg
+fi
+
+
+# To copy2ram or not to copy2ram...
+if `grep -iq copy2ram /proc/cmdline`; then
+	echo -n "Creating ramdisk: "
+	mkdir /copy2ram || failmsg
+	mount -t ramfs none /copy2ram > /dev/null 2>&1 && okmsg || failmsg
+
+	echo -n "Copying system to ram: "
+	cp /mnt/hotmedia/hotroot.sqfs /copy2ram/hotroot.sqfs > /dev/null 2>&1 && okmsg || failmsg
+
+	# Check if /mnt/hotmedia is mounted to optical media
+        grep hotmedia /proc/mounts | grep iso9660 > /dev/null && \
+        EJECTDISC=$( grep hotmedia /proc/mounts | awk '{ print $1 '} );	
+
+	echo -n "Unmounting cdrom: "
+	umount /mnt/hotmedia > /dev/null 2>&1 && okmsg || echo warnmsg
+
+	# If /mnt/hotmedia was mounted to an optical disc, then try to eject
+	if [ $EJECTDISC ]; then
+		echo "Trying to eject the disc..."
+		eject $EJECTDISC > /dev/null
+	fi
+
+	echo -n "Mounting loop filesystem: "
+	mount -o loop -t squashfs /copy2ram/hotroot.sqfs /hotloop > /dev/null 2>&1 && okmsg || failmsg
+else
+	echo -n "Mounting loop filesystem: "
+	mount -o loop -t squashfs /mnt/hotmedia/hotroot.sqfs /hotloop > /dev/null 2>&1 && okmsg || failmsg
+fi
+
+# Unite our squashfs-root with a ramdisk
+echo -n "Mounting UnionFS: "
+mount -t tmpfs none /hotram || failmsg
+mount -t unionfs none -o dirs=/hotram=rw:/hotloop=ro /hotunion && okmsg || failmsg
+
+# Copy our own halt script to the new root
+mv /hotunion/etc/init.d/halt /hotunion/etc/init.d/halt.orig
+install -m 755 /sbin/halt.hotmedia /hotunion/etc/init.d/halt
+
+# set-up the new root, and let that one take over
+echo "Swithing root..."
+mknod /hotunion/dev/console c 5 1 || failmsg
+mknod /hotunion/dev/null c 1 3 || failmsg
+touch /hotunion/etc/fstab
+#exec plymouth --newroot=/hotunion
+echo 0x0100 > /proc/sys/kernel/real-root-dev
+umount /proc/bus/usb
+umount /proc /sys || failmsg
+exec switch_root -c /dev/console /hotunion /sbin/init

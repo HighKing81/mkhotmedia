@@ -1,0 +1,31 @@
+#!/bin/bash
+#
+# halt          This file is executed by init when it goes into runlevel
+#               0 (halt) or runlevel 6 (reboot). It kills all processes,
+#               unmounts file systems and then either halts or reboots.
+#
+# Author:       Michel Hoogervorst <michel@highking.nl>, special version for
+#               mkhotmedia which doesn't try to unmount the loop filesystem
+#		as that's just not possible :-(
+#
+
+umount_all() {
+	echo "Trying to unmount all filesystems... "
+	# Actually... we still need to write this :-P
+}
+
+case "$0" in
+	*halt)
+	umount_all
+        echo 1 > /proc/sys/kernel/sysrq
+	echo o > /proc/sysrq-trigger
+	;;
+	*reboot)
+	umount_all
+        echo 1 > /proc/sys/kernel/sysrq
+	echo b > /proc/sysrq-trigger
+	;;
+	*)
+	echo Please call me as 'halt' or 'reboot'.
+	;;
+esac

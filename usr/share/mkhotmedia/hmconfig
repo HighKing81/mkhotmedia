@@ -1,0 +1,65 @@
+#!/bin/bash                                                       
+#                                                                 
+# HotMedia configure script
+#                                                                 
+# chkconfig:   - 00 99                                            
+# description: Runs some configure stuff on first boot.
+# processname: hmconfigure
+#
+
+case $1 in
+  start)
+
+    echo
+    echo " ---[ Start MCNLive configure script ]--- "
+
+    echo "Running Mandriva drakx11, X11 config tool..."
+    drakx11 --auto
+
+    # Enable urpmi
+    mv /etc/urpmi/urpmi.disabled /etc/urpmi/urpmi.cfg
+
+    # Revert X11 to vesa is vesa bootoption was given.
+    if grep -iq vesa /proc/cmdline; then
+      echo -n "Setting X11 to vesa... "
+      sed -i 's/Modes.*/Modes "1024x768" "800x600" "640x480"/g;/Section "Device"/,/EndSection/s/Driver.*/Driver "vesa"/g' /etc/X11/xorg.conf && echo "done." || echo "FAILED!"
+    fi
+
+    # Add root to /etc/mtab to make it visible in df
+    grep unionfs /proc/mounts >> /etc/mtab
+
+    # Enable local swap partition if useswap bootoptiong was given.
+    if grep -iq useswap /proc/cmdline; then
+      for partition in `fdisk -l | grep ^/dev | grep swap | awk '{ print $1 }'`; do
+        echo -n "Activating swap on $partition... "
+        swapon $partition && echo "done" || "FAILED"
+      done
+    fi
+
+    # Try to mount all local partitions
+    for partition in `fdisk -l | grep ^/dev | grep -iv "swap\|extended" | cut -b 6-10`; do
+      echo -n "Trying to mount /dev/$partition... "
+      mkdir /mnt/$partition
+      if `fdisk -l | grep $partition | grep -iq ntfs`; then
+	mount -t ntfs-3g /dev/$partition /mnt/$partition && echo "done" || echo "FAILED"
+      else
+        mount /dev/$partition /mnt/$partition && echo "done" || echo "FAILED"
+      fi
+      # Put partition entry in /etc/fstab
+      grep $partition /etc/mtab | awk '{ print $1" "$2" "$3" "$4",users 0 0"}' >> /etc/fstab
+    done
+
+    # Try to mount the media again
+    if ! grep -iq copy2ram /proc/cmdline; then
+      mkdir /mnt/hotmedia
+      mount -o loop,ro LABEL=hotmedia /mnt/hotmedia
+    fi
+
+    # Disable this script since it is only needed at first boot
+    /sbin/chkconfig $(basename $0) off
+
+    echo
+    echo " ---[ End of MCNLive configure script ]--- "
+    echo
+  ;;
+esac

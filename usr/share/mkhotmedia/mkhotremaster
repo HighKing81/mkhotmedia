@@ -1,0 +1,35 @@
+#!/bin/bash
+#
+# mkhotremaster
+# This script is used to create a live remaster of a livecd created with mkhotmedia.
+# As such, the mkhotmedia script should be installed on the cd for this script to work.
+#
+# Version 0.1 2010-02-18 - Michel Hoogervorst <michel@highking.nl>
+#
+
+# Enable the hmconfig script
+/sbin/chkconfig hmconfig on
+
+# Get info about the size of our root
+rootsize=$(df -m / | awk '{ print $3 }' | grep [0-9]);
+
+# Get all usable partitions
+partitions=$(for partition in `df -T -m | grep "ext\|ntfs" | awk '{ print $6 }' | grep [0-9]`; do
+  if [ `df -m | grep $partition | awk '{ print $4 }'` -gt "$rootsize" ]; then
+    echo $partition
+  fi;
+done;);
+
+# Ask where the temporary files should be written
+tmp=$(for part in $partitions; do
+  df -h | grep $part | awk '{ print $6"\n"$2"\n"$4 }';
+done | zenity --list --title="Test:" --column="Partition" --column="Total size" --column="Free space")
+
+# Ask where the new iso should be written
+iso=$(zenity --file-selection --save --filename=$tmp/mcnlive-remaster.iso);
+
+# Run mkhotmedia script
+konsole -T 'Creating your personal remaster...' --nomenubar --notabbar -e mkhotmedia -r / -t $tmp/mcnlive-remaster-tempfiles -o $iso
+
+# Disable the hmconfig script again
+/sbin/chkconfig hmconfig off
