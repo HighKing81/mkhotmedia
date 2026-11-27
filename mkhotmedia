@@ -12,22 +12,15 @@ source_root=/mnt/hotmedia
 kernel=$(uname -r);
 media_label=hotmedia
 depmod=/sbin/depmod
-mke2fs=/sbin/mke2fs
-mksquashfs=/usr/bin/mksquashfs
 isolinux_cfg=/usr/share/mkhotmedia/isolinux.cfg
 isolinux_splash=/usr/share/mkhotmedia/splash.jpg
 extras_dir=/home/michel/mcnlive
+
 
 # Constants
 unixtime=$(date +%s);
 dir=$tmpdir/$unixtime
 idir=$dir/tmpinitrd
-
-# We need to be root in order to access all nessecary files.
-if [ "$UID" != "0" ]; then
-        echo "$0 should be run as root."
-        exit 1
-fi
 
 #functions
 copy() {
@@ -43,6 +36,11 @@ Possible options:
  -r <path>  : the source root
  -l <label> : Volume label inside the iso file
  -h         : this help screen"
+}
+
+error() {
+  echo $1;
+  exit 1
 }
 
 # Get command-line optons
@@ -68,9 +66,19 @@ do
   esac
 done
 
+# Sanity checks
+mksquashfs=$(which mksquashfs || error "ERROR: mksquashfs not found, please install squashfs-tools first!")
+test -f $isolinux_cfg || error "ERROR: Could NOT find $isolinux_cfg"
+test -f /usr/bin/busybox || error "ERROR: busybox not found, is it installed?"
 if [ -z $isofile ]; then
 	echo "No output file provided"
 	exit 1
+fi
+
+# We need to be root in order to access all necessary files.
+if [ "$UID" != "0" ]; then
+        echo "$0 should be run as root."
+        exit 1
 fi
 
 echo Building directory structure in $dir...
